@@ -43,6 +43,9 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
+      - name: Run unit tests (password derivation vectors)
+        run: ./gradlew testDebugUnitTest --stacktrace
+
       - name: Build debug APK
         run: ./gradlew assembleDebug --stacktrace
 

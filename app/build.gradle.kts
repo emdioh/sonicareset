@@ -61,4 +61,6 @@ dependencies {
     // Persistence for the manual brush-head tracker is handled with
     // SharedPreferences + org.json (bundled in the Android SDK), so no
     // extra DB dependency or annotation processor is required.
+
+    testImplementation("junit:junit:4.13.2")
 }

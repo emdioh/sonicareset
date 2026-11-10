@@ -10,11 +10,13 @@ import java.io.IOException
  *
  * Scope and limits (by design):
  *  - Writes exactly one 4-byte page per request, to a page chosen by the user.
- *  - If the target page is protected, the user may supply THEIR OWN password;
- *    it is sent as a standard PWD_AUTH (0x1B) command. This object does NOT
- *    derive, guess or brute-force any password or key: no manufacturer
- *    key-derivation is implemented here. If the user does not know the
- *    password, protected pages simply remain unwritable.
+ *  - If the target page is protected, the user may supply their OWN password,
+ *    or ask the app to derive the Sonicare head password from the tag's UID and
+ *    the MFG code printed on the head ([SonicarePassword]). Either way it is
+ *    sent as a standard PWD_AUTH (0x1B) command.
+ *  - There is NO brute force: a derivation produces exactly one candidate, and
+ *    a failed PWD_AUTH is never retried automatically. NTAG213 heads ship with
+ *    CFG1=0x43, meaning three wrong passwords permanently disable writing.
  *  - Pages 0..3 (UID / internal / lock bytes / OTP) are always refused, because
  *    writing them is either useless or permanently bricks the tag.
  *
@@ -30,11 +32,28 @@ object NfcWriter {
         val page: Int,
         val data: ByteArray,        // exactly 4 bytes
         val password: ByteArray?,   // exactly 4 bytes for PWD_AUTH, or null
-    )
+    ) {
+        // data class with a ByteArray needs structural equals/hashCode by hand.
+        override fun equals(other: Any?): Boolean = when {
+            this === other -> true
+            other !is WriteRequest -> false
+            else -> page == other.page && data.contentEquals(other.data) &&
+                (password?.contentEquals(other.password) ?: (other.password == null))
+        }
+
+        override fun hashCode(): Int =
+            31 * (31 * page + data.contentHashCode()) + (password?.contentHashCode() ?: 0)
+    }
 
     sealed interface WriteResult {
-        /** The page was written. [pack] is the PACK returned by PWD_AUTH, if a password was used. */
-        data class Success(val page: Int, val pack: String?) : WriteResult
+        /**
+         * The page was written. [pack] is the PACK returned by PWD_AUTH, if a
+         * password was used.
+         */
+        data class Success(
+            val page: Int,
+            val pack: String?,
+        ) : WriteResult
         /** The request was refused by the app's own guard-rails (not by the tag). */
         data class Blocked(val message: String) : WriteResult
         /** The tag or transport rejected or failed the operation. */
@@ -107,6 +126,59 @@ object NfcWriter {
             try { nfcA.close() } catch (_: Exception) {}
         }
     }
+
+    // ------------------------------------------------------------ derivation
+
+    /**
+     * Outcome of deriving a password.
+     * [derived] is kept so the UI can show which UID/MFG produced the password.
+     */
+    sealed interface DerivedPassword {
+        data class Ready(val derived: SonicarePassword.Derived) : DerivedPassword
+        data class Err(val message: String) : DerivedPassword
+    }
+
+    /**
+     * Derive the password from [uidHex] + [mfg] with the ATC1441 algorithm,
+     * instead of taking a password from the user.
+     */
+    fun derivePassword(uidHex: String, mfg: String): DerivedPassword =
+        when (val out = SonicarePassword.derive(uidHex, mfg)) {
+            is SonicarePassword.Outcome.Invalid -> DerivedPassword.Err(out.message)
+            is SonicarePassword.Outcome.Ok -> DerivedPassword.Ready(out.derived)
+        }
+
+    /**
+     * Derive the password for a head that has just been read, taking the MFG
+     * code from the tag's own page 0x21 offset 2, so nothing has to be typed.
+     *
+     * This only *derives*: the caller still builds the [WriteRequest] with the
+     * page and data it actually wants, so no write is implied here.
+     */
+    fun derivePasswordFromScan(scan: ScanResult): DerivedPassword {
+        val mfg = SonicarePassword.mfgFromPages(scan.pages)
+            ?: return DerivedPassword.Err(
+                "Il dump non contiene il codice MFG (pagina 0x21, offset 2)."
+            )
+        return derivePassword(scan.uid, mfg)
+    }
+
+    /**
+     * Convenience: a [WriteRequest] for [page]/[data] using a password derived
+     * from [uidHex] + [mfg] instead of one typed by the user.
+     */
+    fun withDerivedPassword(
+        page: Int,
+        data: ByteArray,
+        uidHex: String,
+        mfg: String,
+    ): Pair<WriteRequest, SonicarePassword.Derived>? =
+        (derivePassword(uidHex, mfg) as? DerivedPassword.Ready)?.let {
+            WriteRequest(page, data, it.derived.password) to it.derived
+        }
+
+    /** Sonicare used-time counter page; bytes 0..1 hold the counter. */
+    const val USAGE_PAGE = SonicarePassword.USAGE_PAGE
 
     private fun authAwareMessage(e: IOException, usedPassword: Boolean): String {
         val base = e.message?.takeIf { it.isNotBlank() }
