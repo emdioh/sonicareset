@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Nfc
 import androidx.compose.material.icons.filled.Spa
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -26,10 +27,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.sonicareset.app.nfc.NfcReader
+import com.sonicareset.app.nfc.NfcWriter
 import com.sonicareset.app.nfc.ScanResult
 import com.sonicareset.app.tracker.TrackerViewModel
 import com.sonicareset.app.ui.ScanScreen
 import com.sonicareset.app.ui.TrackerScreen
+import com.sonicareset.app.ui.WriteScreen
 
 /**
  * Host activity. Wires a strictly read-only NFC reader (reader mode) to the
@@ -44,14 +47,27 @@ class MainActivity : ComponentActivity() {
     private val scanResultState = mutableStateOf<ScanResult?>(null)
     private val nfcEnabledState = mutableStateOf(false)
 
+    // Mediates the experimental write flow.
+    private val writeController = WriteController()
+
     private val readerCallback = NfcAdapter.ReaderCallback { tag: Tag ->
-        val result = try {
-            NfcReader.read(tag)
-        } catch (t: Throwable) {
-            null
-        }
-        if (result != null) {
-            runOnUiThread { scanResultState.value = result }
+        val pending = writeController.pending
+        if (pending != null) {
+            // A write is armed: perform exactly that one write, then disarm.
+            val res = NfcWriter.write(tag, pending)
+            runOnUiThread {
+                writeController.reportResult(renderWriteResult(res))
+                writeController.disarm()
+            }
+        } else {
+            val result = try {
+                NfcReader.read(tag)
+            } catch (t: Throwable) {
+                null
+            }
+            if (result != null) {
+                runOnUiThread { scanResultState.value = result }
+            }
         }
     }
 
@@ -66,6 +82,7 @@ class MainActivity : ComponentActivity() {
                     hasNfc = nfcAdapter != null,
                     nfcEnabled = nfcEnabledState.value,
                     scanResult = scanResultState.value,
+                    writeController = writeController,
                 )
             }
         }
@@ -93,7 +110,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Tab { Scan, Tracker }
+private enum class Tab { Scan, Write, Tracker }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -101,6 +118,7 @@ private fun AppRoot(
     hasNfc: Boolean,
     nfcEnabled: Boolean,
     scanResult: ScanResult?,
+    writeController: WriteController,
 ) {
     var tab by remember { mutableStateOf(Tab.Scan) }
     val trackerVm: TrackerViewModel = viewModel()
@@ -108,7 +126,13 @@ private fun AppRoot(
     Scaffold(
         topBar = {
             TopAppBar(title = {
-                Text(if (tab == Tab.Scan) "Lettura NFC" else "Testine")
+                Text(
+                    when (tab) {
+                        Tab.Scan -> "Lettura NFC"
+                        Tab.Write -> "Scrittura (sperimentale)"
+                        Tab.Tracker -> "Testine"
+                    }
+                )
             })
         },
         bottomBar = {
@@ -118,6 +142,12 @@ private fun AppRoot(
                     onClick = { tab = Tab.Scan },
                     icon = { Icon(Icons.Filled.Nfc, contentDescription = null) },
                     label = { Text("Scansione") },
+                )
+                NavigationBarItem(
+                    selected = tab == Tab.Write,
+                    onClick = { tab = Tab.Write },
+                    icon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+                    label = { Text("Scrivi") },
                 )
                 NavigationBarItem(
                     selected = tab == Tab.Tracker,
@@ -135,10 +165,24 @@ private fun AppRoot(
                 nfcEnabled = nfcEnabled,
                 modifier = Modifier.padding(padding),
             )
+            Tab.Write -> WriteScreen(
+                controller = writeController,
+                hasNfc = hasNfc,
+                nfcEnabled = nfcEnabled,
+                modifier = Modifier.padding(padding),
+            )
             Tab.Tracker -> TrackerScreen(
                 vm = trackerVm,
                 modifier = Modifier.padding(padding),
             )
         }
     }
+}
+
+/** Render an [NfcWriter.WriteResult] as a short Italian message for the UI. */
+private fun renderWriteResult(res: NfcWriter.WriteResult): String = when (res) {
+    is NfcWriter.WriteResult.Success ->
+        "Pagina ${res.page} scritta." + (res.pack?.let { " PACK: $it" } ?: "")
+    is NfcWriter.WriteResult.Blocked -> res.message
+    is NfcWriter.WriteResult.Failure -> res.message
 }

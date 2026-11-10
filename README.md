@@ -12,10 +12,25 @@ App Android per **leggere** il tag NFC delle testine Philips Sonicare e per
 - **Scansione NFC** — avvicina il retro del telefono alla testina: l'app mostra
   UID, tipo di tag, lista tecnologie, ATQA/SAK e il dump (sola lettura) delle
   pagine leggibili. Le pagine protette non vengono forzate.
+- **Scrivi (sperimentale)** — scrive 4 byte su una pagina scelta del tag che
+  presenti. Supporta `PWD_AUTH` **con la password fornita da te**; l'app non
+  ricava, indovina né forza alcuna password o chiave. Pensata per sperimentare
+  sul proprio hardware.
 - **Testine** — registra a mano quando monti una testina e la sua durata
   obiettivo (default 90 giorni). L'app calcola giorni trascorsi, percentuale di
   usura e quando è il momento di sostituirla. Pulsante *Reset* quando monti una
   testina nuova.
+
+### ⚠️ Avvertenze sulla scrittura
+
+- Le **pagine 0-3** (UID / lock bytes / OTP) sono **bloccate** dall'app: scriverle
+  è inutile o rende il tag **inutilizzabile in modo permanente**.
+- Le pagine protette (come il **contatore d'uso** delle testine Sonicare)
+  richiedono la **password del tag**. Senza, la scrittura viene **rifiutata dal
+  tag stesso**. L'app usa solo una password che inserisci tu; non la deriva.
+- Scrivere valori errati sulle pagine di configurazione (PWD/AUTH0/ACCESS) può
+  bloccarti fuori dal tag per sempre. Procedi solo su hardware tuo e di cui puoi
+  accettare la perdita.
 
 ## Scaricare l'APK (senza compilare nulla)
 
